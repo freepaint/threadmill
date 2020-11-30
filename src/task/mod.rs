@@ -1,4 +1,4 @@
-pub trait Task {
+pub trait Task: Send {
 	fn exec(&mut self) -> TaskState;
 }
 

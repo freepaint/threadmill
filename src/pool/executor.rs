@@ -3,7 +3,8 @@ use std::time::Instant;
 
 pub struct ExecutionTimeWrapper(Option<Instant>);
 
-enum ETOperation {
+#[derive(Clone)]
+pub enum ETOperation {
 	Set(Instant),
 	Clear,
 }

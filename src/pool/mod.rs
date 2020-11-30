@@ -39,13 +39,13 @@ impl ThreadPool {
 		// Spawn thread for priority queue
 		handles.push(std::thread::spawn(gen_executor(scheduler.priority.1.clone(), scheduler.priority.0.clone())));
 
-		Self
+		Self {}
 	}
 }
 
 // This got its own function for readability
-fn gen_executor(queue: flume::Receiver<Box<dyn Task>>, scheduler: flume::Sender<Box<dyn Task>>) -> impl FnOnce() -> () {
-	|| loop {
+fn gen_executor(queue: flume::Receiver<Box<dyn Task>>, scheduler: flume::Sender<Box<dyn Task>>) -> impl FnOnce() {
+	move || loop {
 		for mut task in queue.try_iter().do_for(Duration::from_millis(100)) {
 			match task.exec() {
 				// Reschedule task for next execution
