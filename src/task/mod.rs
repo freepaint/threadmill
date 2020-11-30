@@ -1,8 +1,3 @@
 pub trait Task: Send {
-	fn exec(&mut self) -> TaskState;
-}
-
-pub enum TaskState {
-	Reschedule,
-	Done,
+	fn exec(&mut self, rescheduler: Box<dyn FnOnce()>);
 }

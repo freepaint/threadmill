@@ -1,4 +1,5 @@
-use crate::task::{Task, TaskState};
+use crate::task::Task;
+use flume::TryRecvError;
 use std::time::Duration;
 use until::UntilExt;
 
@@ -7,7 +8,7 @@ pub struct ThreadPool {
 }
 
 #[derive(Clone, Default)]
-struct Scheduler {
+pub struct Scheduler {
 	/// Despite its name, priority only gets a single thread with the single goal of depleting this queue forever
 	priority: SchedulerQueue,
 	/// This queue processes all tasks single threaded with regular priority
@@ -59,15 +60,16 @@ impl ThreadPool {
 fn gen_executor(queue: SchedulerQueue) -> impl FnOnce() {
 	move || loop {
 		for mut task in queue.queue.iter().do_for(Duration::from_millis(100)) {
-			match task.exec() {
-				// Reschedule task for next execution
-				TaskState::Reschedule => {
-					if queue.scheduler.send(task).is_err() {
-						// TODO: Log event
-						return; // Assuming queue is closed meaning the scheduler has shutdown
-					}
+			let (tx, rx) = flume::bounded(0);
+			task.exec(Box::new(move || {
+				tx.send(()).expect("reschedule channel may not be closed")
+			}));
+			match rx.try_recv() {
+				Ok(_) => drop(queue.scheduler.send(task)),
+				Err(TryRecvError::Disconnected) => (),
+				Err(TryRecvError::Empty) => {
+					todo!() // TODO: reschedule this for waiting async
 				}
-				TaskState::Done => {}
 			}
 		}
 	}
