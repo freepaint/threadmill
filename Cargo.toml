@@ -7,5 +7,4 @@ edition = "2018"
 [dependencies]
 num_cpus = "1.13"
 flume = "0.9"
-evc = "0.1"
 until = "0.1"

@@ -7,12 +7,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4785bdd1c96b2a846b2bd7cc02e86b6b3dbf14e7e53446c4f54c92a361040822"
 
 [[package]]
-name = "evc"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2de2e94465a67e1e4b301c4ce33c6632e16c9241ca298b7c6d698acc70bdc1b"
-
-[[package]]
 name = "flume"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -147,7 +141,6 @@ dependencies = [
 name = "threadmill"
 version = "0.1.0"
 dependencies = [
- "evc",
  "flume",
  "num_cpus",
  "until",
