@@ -1,4 +1,6 @@
 use crate::task::Task;
+use std::time::Duration;
+use until::UntilExt;
 
 mod executor;
 
@@ -12,8 +14,11 @@ impl ThreadPool {
 	pub fn new_max(thread_count: usize) -> Self {
 		let (tx, rx) = flume::unbounded();
 
-		let threads = vec![];
-		std::thread::spawn(gen_executor(rx.clone()));
+		let handles = (0..thread_count)
+			.map(|_| std::thread::spawn(gen_executor(rx.clone())))
+			.collect::<Vec<_>>();
+
+		Self
 	}
 }
 
@@ -21,6 +26,9 @@ impl ThreadPool {
 fn gen_executor(rx: flume::Receiver<Task>) -> impl FnOnce() -> () {
 	|| loop {
 		// DO async tasks
-		for task in rx.try_iter().take(10) {} // Use until iter I just made later here because take sucks in that case
+		for task in rx.try_iter().do_for(Duration::from_millis(100)) {}
+		if rx.is_empty() {
+			std::thread::park_timeout(Duration::from_secs(30));
+		}
 	}
 }
