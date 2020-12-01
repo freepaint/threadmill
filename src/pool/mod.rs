@@ -4,6 +4,8 @@ use flume::TryRecvError;
 use std::time::Duration;
 use until::UntilExt;
 
+type WatchdogCallback = (Box<dyn Task>, flume::Receiver<()>);
+
 pub struct ThreadPool {
 	scheduler: Scheduler,
 }
@@ -43,26 +45,41 @@ impl ThreadPool {
 		let scheduler = Scheduler::default();
 
 		// Spawn work threads
+		let (callback, worker_callback) = flume::unbounded();
+		let worker_scheduler = scheduler.work.clone();
 		let mut handles = (0..thread_count)
-			.map(|_| std::thread::spawn(gen_executor(scheduler.work.clone())))
+			.map(|_| std::thread::spawn(gen_executor(worker_scheduler.clone(), callback)))
 			.collect::<Vec<_>>();
 
 		// Spawn thread for regular queue
-		handles.push(std::thread::spawn(gen_executor(scheduler.regular.clone())));
+		let (callback, regular_callback) = flume::unbounded();
+		let regular_scheduler = scheduler.regular.clone();
+		handles.push(std::thread::spawn(gen_executor(
+			scheduler.regular.clone(),
+			callback,
+		)));
 
 		// Spawn thread for priority queue
-		handles.push(std::thread::spawn(gen_executor(scheduler.priority.clone())));
+		let (callback, priority_callback) = flume::unbounded();
+		let priority_scheduler = scheduler.priority.clone();
+		handles.push(std::thread::spawn(gen_executor(
+			scheduler.priority.clone(),
+			callback,
+		)));
+
+		std::thread::spawn(move || {
+			gen_watchdog(vec![
+				(worker_callback, worker_scheduler),
+				(regular_callback, regular_scheduler),
+				(priority_callback, priority_scheduler),
+			])
+		});
 
 		Self { scheduler }
 	}
 }
 
-fn gen_watchdog(
-	queues: Vec<(
-		flume::Receiver<(Box<dyn Task>, flume::Receiver<()>)>,
-		SchedulerQueue,
-	)>,
-) {
+fn gen_watchdog(queues: Vec<(flume::Receiver<WatchdogCallback>, SchedulerQueue)>) {
 	let mut queues = queues
 		.into_iter()
 		.zip(0usize..)
@@ -114,8 +131,8 @@ fn gen_watchdog(
 	}
 }
 
-// This got its own function for readability
-fn gen_executor(queue: SchedulerQueue) -> impl FnOnce() {
+// This got its own function for "readability"
+fn gen_executor(queue: SchedulerQueue, watchdog: flume::Sender<WatchdogCallback>) -> impl FnOnce() {
 	move || loop {
 		for mut task in queue.queue.iter().do_for(Duration::from_millis(100)) {
 			let (tx, rx) = flume::bounded(0);
@@ -126,7 +143,9 @@ fn gen_executor(queue: SchedulerQueue) -> impl FnOnce() {
 				Ok(_) => drop(queue.scheduler.send(task)),
 				Err(TryRecvError::Disconnected) => (),
 				Err(TryRecvError::Empty) => {
-					todo!() // TODO: reschedule this for waiting async
+					watchdog
+						.send((task, rx))
+						.expect("Watchdog died, unable to reschedule task");
 				}
 			}
 		}
