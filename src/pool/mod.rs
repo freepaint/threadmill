@@ -1,5 +1,6 @@
 use crate::task::Task;
-use flume::TryRecvError;
+
+use flume::{RecvError, TryRecvError};
 use std::time::Duration;
 use until::UntilExt;
 
@@ -53,6 +54,70 @@ impl ThreadPool {
 		handles.push(std::thread::spawn(gen_executor(scheduler.priority.clone())));
 
 		Self { scheduler }
+	}
+}
+
+fn gen_watchdog(
+	queues: Vec<(
+		flume::Receiver<(Box<dyn Task>, flume::Receiver<()>)>,
+		SchedulerQueue,
+	)>,
+) {
+	let mut queues = queues
+		.into_iter()
+		.zip(0usize..)
+		.map(|((rcv, sched), id)| (id, Some(rcv), sched))
+		.collect::<Vec<_>>();
+	let mut tasks = Vec::<(Box<dyn Task>, flume::Receiver<()>, usize)>::new();
+	loop {
+		let mut selector = flume::Selector::new();
+		let mut any = false;
+		for queue in queues.iter().filter(|(_, rcv, _)| rcv.is_some()) {
+			let id = queue.0;
+			selector = selector.recv(&queue.1.as_ref().unwrap(), move |new_task| match new_task {
+				Ok((task, rcv)) => Handle::NewTask(task, rcv, id),
+				Err(_) => Handle::RemoveQueue(queue.0),
+			});
+			any = true;
+		}
+		if any && tasks.len() == 0 {
+			return;
+		}
+		for task in tasks.iter().zip(0..) {
+			let id = task.1;
+			selector = selector.recv(&(task.0).1, move |res| match res {
+				Ok(_) => Handle::Reschedule(id),
+				Err(_) => Handle::RemoveTask(task.1),
+			});
+		}
+		match selector.wait() {
+			Handle::NewTask(task, rcv, sched_id) => {
+				tasks.push((task, rcv, sched_id));
+			}
+			Handle::Reschedule(task_id) => {
+				let (task, _, sched_id) = tasks.remove(task_id);
+				let (_, _, sched) = queues.get(sched_id).unwrap();
+				let _ = sched.scheduler.send(task);
+			}
+			Handle::RemoveTask(task_id) => drop(tasks.remove(task_id)),
+			Handle::RemoveQueue(queue_id) => {
+				queues.get_mut(queue_id).unwrap().1 = None;
+			}
+		}
+	}
+
+	enum Handle {
+		NewTask(Box<dyn Task>, flume::Receiver<()>, usize),
+		Reschedule(usize),
+		RemoveTask(usize),
+		RemoveQueue(usize),
+	}
+
+	fn task_handler(scheduler: &SchedulerQueue) -> impl FnOnce(Result<Box<dyn Task>, RecvError>) {
+		|task| match task {
+			Ok(task) => {}
+			Err(_) => {}
+		}
 	}
 }
 
