@@ -138,7 +138,7 @@ fn gen_watchdog(queues: Vec<(flume::Receiver<WatchdogCallback>, SchedulerQueue)>
 fn gen_executor(queue: SchedulerQueue, watchdog: flume::Sender<WatchdogCallback>) -> impl FnOnce() {
 	move || loop {
 		for mut task in queue.queue.iter().do_for(Duration::from_millis(100)) {
-			let (tx, rx) = flume::bounded(0);
+			let (tx, rx) = flume::bounded(1);
 			task.exec(Box::new(move || {
 				tx.send(()).expect("reschedule channel may not be closed")
 			}));

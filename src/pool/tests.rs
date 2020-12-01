@@ -3,13 +3,12 @@ use rand::Rng;
 
 #[test]
 fn workload() {
-	assert!(false, "this test is broken");
 	let mut rng = rand::thread_rng();
 	let mut load = Polygon::new();
 	for _ in 0..10 {
 		load.push(rng.gen());
 	}
-	let pool = super::ThreadPool::new();
+	let pool = super::ThreadPool::new_max(1);
 	let bar = std::sync::Arc::new(std::sync::Barrier::new(21));
 	for i in 0..20 {
 		pool.scheduler
@@ -20,7 +19,7 @@ fn workload() {
 				bar: bar.clone(),
 				tests: 0,
 				hit_count: 0,
-				target: 1_000_000,
+				target: 100_000,
 				id: i,
 			}))
 			.unwrap();
