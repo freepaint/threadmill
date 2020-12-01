@@ -48,7 +48,7 @@ impl ThreadPool {
 		let (callback, worker_callback) = flume::unbounded();
 		let worker_scheduler = scheduler.work.clone();
 		let mut handles = (0..thread_count)
-			.map(|_| std::thread::spawn(gen_executor(worker_scheduler.clone(), callback)))
+			.map(|_| std::thread::spawn(gen_executor(worker_scheduler.clone(), callback.clone())))
 			.collect::<Vec<_>>();
 
 		// Spawn thread for regular queue
