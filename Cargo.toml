@@ -8,6 +8,8 @@ edition = "2018"
 num_cpus = "1.13"
 flume = "0.9"
 until = "0.1"
+parking_lot = "0.11"
+futures-task = "0.3"
 
 [dev-dependencies]
 rand = "0.7.3"

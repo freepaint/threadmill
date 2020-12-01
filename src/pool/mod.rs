@@ -4,6 +4,7 @@ mod tests;
 use crate::task::Task;
 
 use flume::TryRecvError;
+use std::thread::JoinHandle;
 use std::time::Duration;
 use until::UntilExt;
 
@@ -11,6 +12,7 @@ type WatchdogCallback = (Box<dyn Task>, flume::Receiver<()>);
 
 pub struct ThreadPool {
 	scheduler: Scheduler,
+	handles: Vec<JoinHandle<()>>,
 }
 
 #[derive(Clone, Default)]
@@ -78,7 +80,15 @@ impl ThreadPool {
 			])
 		});
 
-		Self { scheduler }
+		Self { scheduler, handles }
+	}
+}
+
+impl Drop for ThreadPool {
+	fn drop(&mut self) {
+		while let Some(handle) = self.handles.pop() {
+			let _ = handle.join();
+		}
 	}
 }
 
