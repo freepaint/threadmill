@@ -1,6 +1,6 @@
 use crate::task::Task;
 
-use flume::{RecvError, TryRecvError};
+use flume::TryRecvError;
 use std::time::Duration;
 use until::UntilExt;
 
@@ -80,7 +80,7 @@ fn gen_watchdog(
 			});
 			any = true;
 		}
-		if any && tasks.len() == 0 {
+		if any && tasks.is_empty() {
 			return;
 		}
 		for task in tasks.iter().zip(0..) {
@@ -111,13 +111,6 @@ fn gen_watchdog(
 		Reschedule(usize),
 		RemoveTask(usize),
 		RemoveQueue(usize),
-	}
-
-	fn task_handler(scheduler: &SchedulerQueue) -> impl FnOnce(Result<Box<dyn Task>, RecvError>) {
-		|task| match task {
-			Ok(task) => {}
-			Err(_) => {}
-		}
 	}
 }
 
