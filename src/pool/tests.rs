@@ -9,22 +9,22 @@ fn workload() {
 		load.push(rng.gen());
 	}
 	let pool = super::ThreadPool::new_max(1);
-	let bar = std::sync::Arc::new(std::sync::Barrier::new(21));
-	for i in 0..20 {
+	let (tx, rx) = flume::unbounded();
+	for i in 0..5 {
 		pool.scheduler
 			.work
 			.scheduler
 			.send(Box::new(MathWorker {
 				polygon: load.clone(),
-				bar: bar.clone(),
+				bar: tx.clone(),
 				tests: 0,
 				hit_count: 0,
-				target: 100_000,
+				target: 10_000,
 				id: i,
 			}))
 			.unwrap();
 	}
-	bar.wait();
+	println!("{}", rx.iter().take(5).sum::<f64>() / 5.0);
 }
 
 type Point = (f64, f64);
@@ -32,7 +32,7 @@ type Polygon = Vec<Point>;
 struct MathWorker {
 	polygon: Polygon,
 	tests: u32,
-	bar: std::sync::Arc<std::sync::Barrier>,
+	bar: flume::Sender<f64>,
 	hit_count: u32,
 	target: u32,
 	id: u32,
@@ -40,7 +40,7 @@ struct MathWorker {
 
 impl Task for MathWorker {
 	fn exec(&mut self, rescheduler: Box<dyn FnOnce()>) {
-		let steps = 10_000.min(self.target - self.tests);
+		let steps = 1_000.min(self.target - self.tests);
 		let mut rng = rand::thread_rng();
 		for _ in 0..steps {
 			let point = rng.gen();
@@ -53,12 +53,9 @@ impl Task for MathWorker {
 			println!("[{}] Rescheduling! {}", self.id, self.tests);
 			rescheduler();
 		} else {
-			println!(
-				"[{}] Result: {}%",
-				self.id,
-				self.hit_count as f64 / self.tests as f64 * 100.0
-			);
-			self.bar.wait();
+			let res = self.hit_count as f64 / self.tests as f64;
+			println!("[{}] Result: {}%", self.id, res * 100.0);
+			self.bar.send(res).unwrap();
 		}
 	}
 }
