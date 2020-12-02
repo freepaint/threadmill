@@ -1,18 +1,19 @@
+mod death;
 #[cfg(test)]
 mod tests;
 
+use crate::pool::death::{DeathController, DeathToken};
 use crate::task::Task;
-
-use flume::TryRecvError;
+use flume::{Selector, TryRecvError};
+use log::debug;
 use std::thread::JoinHandle;
-use std::time::Duration;
-use until::UntilExt;
 
 type WatchdogCallback = (Box<dyn Task>, flume::Receiver<()>);
 
 pub struct ThreadPool {
 	scheduler: Scheduler,
 	handles: Vec<JoinHandle<()>>,
+	death_con: DeathController,
 }
 
 #[derive(Clone, Default)]
@@ -48,51 +49,76 @@ impl ThreadPool {
 
 	pub fn new_max(thread_count: usize) -> Self {
 		let scheduler = Scheduler::default();
+		let mut death_con = DeathController::default();
 
 		// Spawn work threads
 		let (callback, worker_callback) = flume::unbounded();
 		let worker_scheduler = scheduler.work.clone();
 		let mut handles = (0..thread_count)
-			.map(|_| std::thread::spawn(gen_executor(worker_scheduler.clone(), callback.clone())))
+			.map(|i| {
+				debug!("Spawning work executor {}", i);
+				std::thread::spawn(gen_executor(
+					worker_scheduler.clone(),
+					callback.clone(),
+					death_con.token(),
+				))
+			})
 			.collect::<Vec<_>>();
 
 		// Spawn thread for regular queue
 		let (callback, regular_callback) = flume::unbounded();
 		let regular_scheduler = scheduler.regular.clone();
+		debug!("Spawning regular executor");
 		handles.push(std::thread::spawn(gen_executor(
 			scheduler.regular.clone(),
 			callback,
+			death_con.token(),
 		)));
 
 		// Spawn thread for priority queue
 		let (callback, priority_callback) = flume::unbounded();
 		let priority_scheduler = scheduler.priority.clone();
+		debug!("Spawning priority executor");
 		handles.push(std::thread::spawn(gen_executor(
 			scheduler.priority.clone(),
 			callback,
+			death_con.token(),
 		)));
 
-		std::thread::spawn(move || {
-			gen_watchdog(vec![
-				(worker_callback, worker_scheduler),
-				(regular_callback, regular_scheduler),
-				(priority_callback, priority_scheduler),
-			])
-		});
+		let dtc = death_con.token();
+		debug!("Spawning Watchdog");
+		handles.push(std::thread::spawn(move || {
+			run_watchdog(
+				vec![
+					(worker_callback, worker_scheduler),
+					(regular_callback, regular_scheduler),
+					(priority_callback, priority_scheduler),
+				],
+				dtc,
+			)
+		}));
 
-		Self { scheduler, handles }
+		Self {
+			scheduler,
+			handles,
+			death_con,
+		}
 	}
 }
 
 impl Drop for ThreadPool {
 	fn drop(&mut self) {
+		debug!("Sending Death notification...");
+		self.death_con.kill();
 		while let Some(handle) = self.handles.pop() {
+			debug!("Joining thread...");
 			let _ = handle.join();
 		}
+		debug!("ThreadPool shutdown");
 	}
 }
 
-fn gen_watchdog(queues: Vec<(flume::Receiver<WatchdogCallback>, SchedulerQueue)>) {
+fn run_watchdog(queues: Vec<(flume::Receiver<WatchdogCallback>, SchedulerQueue)>, dt: DeathToken) {
 	let mut queues = queues
 		.into_iter()
 		.zip(0usize..)
@@ -100,7 +126,7 @@ fn gen_watchdog(queues: Vec<(flume::Receiver<WatchdogCallback>, SchedulerQueue)>
 		.collect::<Vec<_>>();
 	let mut tasks = Vec::<(Box<dyn Task>, flume::Receiver<()>, usize)>::new();
 	loop {
-		let mut selector = flume::Selector::new();
+		let mut selector = flume::Selector::new().recv(dt.listen(), |_| Handle::Death);
 		let mut any = false;
 		for queue in queues.iter().filter(|(_, rcv, _)| rcv.is_some()) {
 			let id = queue.0;
@@ -110,7 +136,7 @@ fn gen_watchdog(queues: Vec<(flume::Receiver<WatchdogCallback>, SchedulerQueue)>
 			});
 			any = true;
 		}
-		if any && tasks.is_empty() {
+		if !any && tasks.is_empty() {
 			return;
 		}
 		for task in tasks.iter().zip(0..) {
@@ -133,6 +159,10 @@ fn gen_watchdog(queues: Vec<(flume::Receiver<WatchdogCallback>, SchedulerQueue)>
 			Handle::RemoveQueue(queue_id) => {
 				queues.get_mut(queue_id).unwrap().1 = None;
 			}
+			Handle::Death => {
+				debug!("Watchdog received Death Request, Exiting...");
+				return;
+			}
 		}
 	}
 
@@ -141,13 +171,22 @@ fn gen_watchdog(queues: Vec<(flume::Receiver<WatchdogCallback>, SchedulerQueue)>
 		Reschedule(usize),
 		RemoveTask(usize),
 		RemoveQueue(usize),
+		Death,
 	}
 }
 
 // This got its own function for "readability"
-fn gen_executor(queue: SchedulerQueue, watchdog: flume::Sender<WatchdogCallback>) -> impl FnOnce() {
-	move || loop {
-		for mut task in queue.queue.iter().do_for(Duration::from_millis(100)) {
+fn gen_executor(
+	queue: SchedulerQueue,
+	watchdog: flume::Sender<WatchdogCallback>,
+	dt: DeathToken,
+) -> impl FnOnce() {
+	move || {
+		while let Some(Ok(mut task)) = Selector::new()
+			.recv(dt.listen(), |_| None)
+			.recv(&queue.queue, Some)
+			.wait()
+		{
 			let (tx, rx) = flume::bounded(1);
 			task.exec(Box::new(move || {
 				tx.send(()).expect("reschedule channel may not be closed")

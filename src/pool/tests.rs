@@ -3,6 +3,9 @@ use rand::Rng;
 
 #[test]
 fn workload() {
+	std::env::set_var("RUST_LOG", "debug");
+	env_logger::init();
+
 	let mut rng = rand::thread_rng();
 	let mut load = Polygon::new();
 	for _ in 0..10 {
@@ -51,7 +54,10 @@ impl Task for MathWorker {
 		self.tests += steps;
 		if self.tests < self.target {
 			println!("[{}] Rescheduling! {}", self.id, self.tests);
-			rescheduler();
+			std::thread::spawn(move || {
+				std::thread::sleep_ms(50);
+				rescheduler();
+			});
 		} else {
 			let res = self.hit_count as f64 / self.tests as f64;
 			println!("[{}] Result: {}%", self.id, res * 100.0);
