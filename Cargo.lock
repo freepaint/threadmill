@@ -327,14 +327,7 @@ dependencies = [
  "num_cpus",
  "parking_lot",
  "rand",
- "until",
 ]
-
-[[package]]
-name = "until"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "993eec731b17dd5b805470ea9709926e5e8f0be5218732dada43c63bab5f4404"
 
 [[package]]
 name = "wasi"
