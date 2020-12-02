@@ -6,6 +6,7 @@ use crate::pool::death::{DeathController, DeathToken};
 use crate::task::Task;
 use flume::{Selector, TryRecvError};
 use log::debug;
+use std::fmt::{Display, Formatter};
 use std::thread::JoinHandle;
 
 type WatchdogCallback = (Box<dyn Task>, flume::Receiver<()>);
@@ -44,10 +45,10 @@ impl Default for SchedulerQueue {
 
 impl ThreadPool {
 	pub fn new() -> Self {
-		Self::new_max(num_cpus::get())
+		Self::new_with_max(num_cpus::get())
 	}
 
-	pub fn new_max(thread_count: usize) -> Self {
+	pub fn new_with_max(thread_count: usize) -> Self {
 		let scheduler = Scheduler::default();
 		let mut death_con = DeathController::default();
 
@@ -137,6 +138,7 @@ fn run_watchdog(queues: Vec<(flume::Receiver<WatchdogCallback>, SchedulerQueue)>
 			any = true;
 		}
 		if !any && tasks.is_empty() {
+			debug!("Watchdog has no work left, Exiting...");
 			return;
 		}
 		for task in tasks.iter().zip(0..) {
@@ -146,7 +148,9 @@ fn run_watchdog(queues: Vec<(flume::Receiver<WatchdogCallback>, SchedulerQueue)>
 				Err(_) => Handle::RemoveTask(task.1),
 			});
 		}
-		match selector.wait() {
+		let handle = selector.wait();
+		debug!("Received Handle{{{}}}", handle);
+		match handle {
 			Handle::NewTask(task, rcv, sched_id) => {
 				tasks.push((task, rcv, sched_id));
 			}
@@ -172,6 +176,18 @@ fn run_watchdog(queues: Vec<(flume::Receiver<WatchdogCallback>, SchedulerQueue)>
 		RemoveTask(usize),
 		RemoveQueue(usize),
 		Death,
+	}
+
+	impl Display for Handle {
+		fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+			match self {
+				Handle::NewTask(_, _, id) => write!(f, "NewTask({})", id),
+				Handle::Reschedule(id) => write!(f, "Reschedule({})", id),
+				Handle::RemoveTask(id) => write!(f, "RemoveTask({})", id),
+				Handle::RemoveQueue(id) => write!(f, "RemoveQueue({})", id),
+				Handle::Death => write!(f, "Death"),
+			}
+		}
 	}
 }
 

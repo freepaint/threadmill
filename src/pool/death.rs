@@ -11,7 +11,7 @@ impl DeathController {
 
 	pub fn kill(&mut self) {
 		for sender in &self.0 {
-			while let Ok(_) = sender.send(()) {}
+			while sender.send(()).is_ok() {}
 		}
 	}
 }
