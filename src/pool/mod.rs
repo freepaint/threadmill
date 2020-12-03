@@ -6,6 +6,7 @@ use crate::pool::death::{DeathController, DeathToken};
 use crate::task::Task;
 use flume::{Selector, TryRecvError};
 use log::debug;
+use rand::Rng;
 use std::fmt::{Display, Formatter};
 use std::thread::JoinHandle;
 
@@ -50,6 +51,7 @@ impl ThreadPool {
 	}
 
 	pub fn new_with_max(thread_count: usize) -> Self {
+		let tp_id = rand::thread_rng().gen::<u32>();
 		let scheduler = Scheduler::default();
 		let mut death_con = DeathController::default();
 
@@ -59,11 +61,14 @@ impl ThreadPool {
 		let mut handles = (0..thread_count)
 			.map(|i| {
 				debug!("Spawning work executor {}", i);
-				std::thread::spawn(gen_executor(
-					worker_scheduler.clone(),
-					callback.clone(),
-					death_con.token(),
-				))
+				std::thread::Builder::new()
+					.name(format!("{}-Worker{{id={}}}", tp_id, i))
+					.spawn(gen_executor(
+						worker_scheduler.clone(),
+						callback.clone(),
+						death_con.token(),
+					))
+					.unwrap()
 			})
 			.collect::<Vec<_>>();
 
@@ -71,36 +76,54 @@ impl ThreadPool {
 		let (callback, regular_callback) = flume::unbounded();
 		let regular_scheduler = scheduler.regular.clone();
 		debug!("Spawning regular executor");
-		handles.push(std::thread::spawn(gen_executor(
-			scheduler.regular.clone(),
-			callback,
-			death_con.token(),
-		)));
+		handles.push(
+			std::thread::Builder::new()
+				.name(format!("{}-Executor{{Regular}}", tp_id))
+				.spawn(gen_executor(
+					scheduler.regular.clone(),
+					callback,
+					death_con.token(),
+				))
+				.unwrap(),
+		);
 
 		// Spawn thread for priority queue
 		let (callback, priority_callback) = flume::unbounded();
 		let priority_scheduler = scheduler.priority.clone();
 		debug!("Spawning priority executor");
-		handles.push(std::thread::spawn(gen_executor(
-			scheduler.priority.clone(),
-			callback,
-			death_con.token(),
-		)));
+		handles.push(
+			std::thread::Builder::new()
+				.name(format!("{}-Executor{{Priority}}", tp_id))
+				.spawn(gen_executor(
+					scheduler.priority.clone(),
+					callback,
+					death_con.token(),
+				))
+				.unwrap(),
+		);
 
 		let dtc = death_con.token();
 		debug!("Spawning Watchdog");
-		handles.push(std::thread::spawn(move || {
-			run_watchdog(
-				vec![
-					(worker_callback, worker_scheduler),
-					(regular_callback, regular_scheduler),
-					(priority_callback, priority_scheduler),
-				],
-				dtc,
-			)
-		}));
+		handles.push(
+			std::thread::Builder::new()
+				.name(format!("{}-Watchdog", tp_id))
+				.spawn(move || {
+					run_watchdog(
+						vec![
+							(worker_callback, worker_scheduler),
+							(regular_callback, regular_scheduler),
+							(priority_callback, priority_scheduler),
+						],
+						dtc,
+					)
+				})
+				.unwrap(),
+		);
 
-		debug!("New ThreadPool created, ThreadPool{{size={}}}", thread_count);
+		debug!(
+			"New ThreadPool created, ThreadPool{{id={},size={}}}",
+			tp_id, thread_count
+		);
 		Self {
 			scheduler,
 			handles,
