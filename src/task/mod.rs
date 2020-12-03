@@ -3,11 +3,9 @@ pub mod sync;
 #[cfg(test)]
 mod tests;
 
-use flume::RecvError;
-pub use r#async::AsyncTask;
 use std::any::Any;
-use std::future::Future;
-use std::process::Output;
+
+pub use r#async::AsyncTask;
 pub use sync::SyncTask;
 
 pub trait Task: Send {

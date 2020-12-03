@@ -1,6 +1,7 @@
 use std::future::Future;
 
 pub use prelude::*;
+use std::panic::UnwindSafe;
 
 pub mod prelude {
 	pub use crate::pool::ThreadPool;
@@ -11,9 +12,17 @@ pub mod pool;
 pub mod task;
 
 pub trait Scheduler {
-	fn schedule(&self, priority: Priority, task: Box<dyn Task>);
-	fn spawn<T: 'static + Send>(&self, priority: Priority, fun: impl FnOnce() -> T + Send);
-	fn spawn_async<T: 'static + Send>(&self, priority: Priority, future: impl Future<Output = T>);
+	fn schedule(&self, priority: Priority, task: impl Task + 'static + Send);
+	fn spawn<T: 'static + Send>(
+		&self,
+		priority: Priority,
+		fun: impl FnOnce() -> T + 'static + Send + UnwindSafe,
+	) -> JoinHandle<T>;
+	fn spawn_async<T: 'static + Send>(
+		&self,
+		priority: Priority,
+		future: impl Future<Output = T> + 'static + Send,
+	) -> JoinHandle<T>;
 }
 
 pub enum Priority {

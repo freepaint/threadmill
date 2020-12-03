@@ -4,57 +4,79 @@ mod tests;
 
 use crate::pool::death::{DeathController, DeathToken};
 use crate::task::Task;
-use flume::select::SelectError;
+use crate::{AsyncTask, Priority, Scheduler, SyncTask};
 use flume::{Selector, TryRecvError};
 use log::debug;
 use rand::Rng;
 use std::fmt::{Display, Formatter};
+use std::future::Future;
+use std::panic::UnwindSafe;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
 type WatchdogCallback = (Box<dyn Task>, flume::Receiver<()>);
 
 pub struct ThreadPool {
-	pub(crate) scheduler: Scheduler,
+	scheduler: TaskScheduler,
 	handles: Vec<JoinHandle<()>>,
 	death_con: DeathController,
 }
 
 #[derive(Clone, Default)]
-pub struct Scheduler {
+pub struct TaskScheduler {
 	/// Despite its name, priority only gets a single thread with the single goal of depleting this queue forever
-	pub(crate) priority: SchedulerQueue,
+	priority: SchedulerQueue,
 	/// This queue processes all tasks single threaded with regular priority
-	pub(crate) regular: SchedulerQueue,
+	regular: SchedulerQueue,
 	/// This queue processes all heavy work loads with n threads, n = num of cpus
-	pub(crate) work: SchedulerQueue,
+	work: SchedulerQueue,
 }
 
 #[derive(Clone)]
 pub struct SchedulerQueue {
-	pub(crate) scheduler: flume::Sender<Box<dyn Task>>,
-	pub(crate) queue: flume::Receiver<Box<dyn Task>>,
+	scheduler: flume::Sender<Box<dyn Task>>,
+	queue: flume::Receiver<Box<dyn Task>>,
 }
 
-impl Default for SchedulerQueue {
-	fn default() -> Self {
-		let (tx, rx) = flume::unbounded();
-		debug!("New Queue created");
-		Self {
-			scheduler: tx,
-			queue: rx,
+impl Scheduler for TaskScheduler {
+	fn schedule(&self, priority: Priority, task: impl Task + 'static) {
+		let task = Box::new(task) as Box<dyn Task>;
+		match priority {
+			Priority::Low | Priority::Normal => self.regular.scheduler.send(task).expect("No ThreadPool"),
+			Priority::High => self.priority.scheduler.send(task).expect("No ThreadPool"),
+			Priority::Bulk => self.work.scheduler.send(task).expect("No ThreadPool"),
 		}
+	}
+
+	fn spawn<T: 'static + Send>(
+		&self,
+		priority: Priority,
+		fun: impl FnOnce() -> T + 'static + Send + UnwindSafe,
+	) -> crate::JoinHandle<T> {
+		let (task, join_handle) = SyncTask::new(fun);
+		self.schedule(priority, task);
+		join_handle
+	}
+
+	fn spawn_async<T: 'static + Send>(
+		&self,
+		priority: Priority,
+		future: impl Future<Output = T> + 'static + Send,
+	) -> crate::JoinHandle<T> {
+		let (task, join_handle) = AsyncTask::new(future);
+		self.schedule(priority, task);
+		join_handle
 	}
 }
 
 impl ThreadPool {
 	pub fn new() -> Self {
-		Self::new_with_max(num_cpus::get())
+		Self::default()
 	}
 
 	pub fn new_with_max(thread_count: usize) -> Self {
 		let tp_id = rand::thread_rng().gen::<u32>();
-		let scheduler = Scheduler::default();
+		let scheduler = TaskScheduler::default();
 		let mut death_con = DeathController::default();
 
 		// Spawn work threads
@@ -134,6 +156,34 @@ impl ThreadPool {
 	}
 }
 
+impl Scheduler for ThreadPool {
+	fn schedule(&self, priority: Priority, task: impl Task + 'static + Send) {
+		self.scheduler.schedule(priority, task)
+	}
+
+	fn spawn<T: 'static + Send>(
+		&self,
+		priority: Priority,
+		fun: impl FnOnce() -> T + 'static + Send + UnwindSafe,
+	) -> crate::JoinHandle<T> {
+		self.scheduler.spawn(priority, fun)
+	}
+
+	fn spawn_async<T: 'static + Send>(
+		&self,
+		priority: Priority,
+		future: impl Future<Output = T> + 'static + Send,
+	) -> crate::JoinHandle<T> {
+		self.scheduler.spawn_async(priority, future)
+	}
+}
+
+impl Default for ThreadPool {
+	fn default() -> Self {
+		Self::new_with_max(num_cpus::get())
+	}
+}
+
 impl Drop for ThreadPool {
 	fn drop(&mut self) {
 		debug!("Sending Death notification...");
@@ -143,6 +193,17 @@ impl Drop for ThreadPool {
 			let _ = handle.join();
 		}
 		debug!("ThreadPool shutdown");
+	}
+}
+
+impl Default for SchedulerQueue {
+	fn default() -> Self {
+		let (tx, rx) = flume::unbounded();
+		debug!("New Queue created");
+		Self {
+			scheduler: tx,
+			queue: rx,
+		}
 	}
 }
 
