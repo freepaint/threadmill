@@ -4,11 +4,13 @@ mod tests;
 
 use crate::pool::death::{DeathController, DeathToken};
 use crate::task::Task;
+use flume::select::SelectError;
 use flume::{Selector, TryRecvError};
 use log::debug;
 use rand::Rng;
 use std::fmt::{Display, Formatter};
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 type WatchdogCallback = (Box<dyn Task>, flume::Receiver<()>);
 
@@ -152,6 +154,7 @@ fn run_watchdog(queues: Vec<(flume::Receiver<WatchdogCallback>, SchedulerQueue)>
 		.map(|((rcv, sched), id)| (id, Some(rcv), sched))
 		.collect::<Vec<_>>();
 	let mut tasks = Vec::<(Box<dyn Task>, flume::Receiver<()>, usize)>::new();
+	let mut timeout_c = 1;
 	loop {
 		let mut selector = flume::Selector::new().recv(dt.listen(), |_| Handle::Death);
 		let mut any = false;
@@ -174,7 +177,18 @@ fn run_watchdog(queues: Vec<(flume::Receiver<WatchdogCallback>, SchedulerQueue)>
 				Err(_) => Handle::RemoveTask(task.1),
 			});
 		}
-		let handle = selector.wait();
+		let handle = selector.wait_timeout(Duration::from_millis(50 * timeout_c));
+		let handle = match handle {
+			Ok(handle) => {
+				timeout_c = 1;
+				handle
+			}
+			Err(_) => {
+				log::debug!("Watchdog Timeout");
+				timeout_c = (timeout_c + 1).min(1000);
+				continue;
+			}
+		};
 		debug!("Received Handler, Handle{{{}}}", handle);
 		match handle {
 			Handle::NewTask(task, rcv, sched_id) => {
