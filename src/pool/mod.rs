@@ -36,6 +36,7 @@ struct SchedulerQueue {
 impl Default for SchedulerQueue {
 	fn default() -> Self {
 		let (tx, rx) = flume::unbounded();
+		debug!("New Queue created");
 		Self {
 			scheduler: tx,
 			queue: rx,
@@ -99,6 +100,7 @@ impl ThreadPool {
 			)
 		}));
 
+		debug!("New ThreadPool created, ThreadPool{{size={}}}", thread_count);
 		Self {
 			scheduler,
 			handles,
@@ -120,6 +122,7 @@ impl Drop for ThreadPool {
 }
 
 fn run_watchdog(queues: Vec<(flume::Receiver<WatchdogCallback>, SchedulerQueue)>, dt: DeathToken) {
+	log::debug!("Started watchdog");
 	let mut queues = queues
 		.into_iter()
 		.zip(0usize..)
@@ -149,19 +152,28 @@ fn run_watchdog(queues: Vec<(flume::Receiver<WatchdogCallback>, SchedulerQueue)>
 			});
 		}
 		let handle = selector.wait();
-		debug!("Received Handle{{{}}}", handle);
+		debug!("Received Handler, Handle{{{}}}", handle);
 		match handle {
 			Handle::NewTask(task, rcv, sched_id) => {
 				tasks.push((task, rcv, sched_id));
+				debug!("Received new Task, Scheduler{{id={}}}", sched_id);
 			}
 			Handle::Reschedule(task_id) => {
 				let (task, _, sched_id) = tasks.remove(task_id);
 				let (_, _, sched) = queues.get(sched_id).unwrap();
 				let _ = sched.scheduler.send(task);
+				debug!(
+					"Rescheduling task, Task{{id={}}} -> Scheduler{{id={}}}",
+					task_id, sched_id
+				);
 			}
-			Handle::RemoveTask(task_id) => drop(tasks.remove(task_id)),
+			Handle::RemoveTask(task_id) => {
+				let _ = tasks.remove(task_id);
+				debug!("Removed task, Task{{id={}}}", task_id);
+			}
 			Handle::RemoveQueue(queue_id) => {
 				queues.get_mut(queue_id).unwrap().1 = None;
+				debug!("Removed Scheduler, Scheduler{{id={}}}", queue_id);
 			}
 			Handle::Death => {
 				debug!("Watchdog received Death Request, Exiting...");
@@ -181,10 +193,10 @@ fn run_watchdog(queues: Vec<(flume::Receiver<WatchdogCallback>, SchedulerQueue)>
 	impl Display for Handle {
 		fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
 			match self {
-				Handle::NewTask(_, _, id) => write!(f, "NewTask({})", id),
-				Handle::Reschedule(id) => write!(f, "Reschedule({})", id),
-				Handle::RemoveTask(id) => write!(f, "RemoveTask({})", id),
-				Handle::RemoveQueue(id) => write!(f, "RemoveQueue({})", id),
+				Handle::NewTask(_, _, id) => write!(f, "NewTask(id={})", id),
+				Handle::Reschedule(id) => write!(f, "Reschedule(id={})", id),
+				Handle::RemoveTask(id) => write!(f, "RemoveTask(id={})", id),
+				Handle::RemoveQueue(id) => write!(f, "RemoveQueue(id={})", id),
 				Handle::Death => write!(f, "Death"),
 			}
 		}

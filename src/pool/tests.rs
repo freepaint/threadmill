@@ -1,5 +1,6 @@
 use crate::task::Task;
 use rand::Rng;
+use std::time::Duration;
 
 #[test]
 fn workload() {
@@ -27,7 +28,7 @@ fn workload() {
 			}))
 			.unwrap();
 	}
-	println!("{}", rx.iter().take(5).sum::<f64>() / 5.0);
+	log::info!("{}", rx.iter().take(5).sum::<f64>() / 5.0);
 }
 
 type Point = (f64, f64);
@@ -53,14 +54,14 @@ impl Task for MathWorker {
 		}
 		self.tests += steps;
 		if self.tests < self.target {
-			println!("[{}] Rescheduling! {}", self.id, self.tests);
+			log::info!("[{}] Rescheduling! {}", self.id, self.tests);
 			std::thread::spawn(move || {
-				std::thread::sleep_ms(50);
+				std::thread::sleep(Duration::from_millis(10));
 				rescheduler();
 			});
 		} else {
 			let res = self.hit_count as f64 / self.tests as f64;
-			println!("[{}] Result: {}%", self.id, res * 100.0);
+			log::info!("[{}] Result: {}%", self.id, res * 100.0);
 			self.bar.send(res).unwrap();
 		}
 	}
