@@ -15,7 +15,7 @@ use std::time::Duration;
 type WatchdogCallback = (Box<dyn Task>, flume::Receiver<()>);
 
 pub struct ThreadPool {
-	scheduler: Scheduler,
+	pub(crate) scheduler: Scheduler,
 	handles: Vec<JoinHandle<()>>,
 	death_con: DeathController,
 }
@@ -23,17 +23,17 @@ pub struct ThreadPool {
 #[derive(Clone, Default)]
 pub struct Scheduler {
 	/// Despite its name, priority only gets a single thread with the single goal of depleting this queue forever
-	priority: SchedulerQueue,
+	pub(crate) priority: SchedulerQueue,
 	/// This queue processes all tasks single threaded with regular priority
-	regular: SchedulerQueue,
+	pub(crate) regular: SchedulerQueue,
 	/// This queue processes all heavy work loads with n threads, n = num of cpus
-	work: SchedulerQueue,
+	pub(crate) work: SchedulerQueue,
 }
 
 #[derive(Clone)]
-struct SchedulerQueue {
-	scheduler: flume::Sender<Box<dyn Task>>,
-	queue: flume::Receiver<Box<dyn Task>>,
+pub struct SchedulerQueue {
+	pub(crate) scheduler: flume::Sender<Box<dyn Task>>,
+	pub(crate) queue: flume::Receiver<Box<dyn Task>>,
 }
 
 impl Default for SchedulerQueue {
