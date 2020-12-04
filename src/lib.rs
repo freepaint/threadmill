@@ -1,12 +1,9 @@
 use std::future::Future;
 
-pub use prelude::*;
 use std::panic::UnwindSafe;
 
-pub mod prelude {
-	pub use crate::pool::ThreadPool;
-	pub use crate::task::{AsyncTask, JoinHandle, SyncTask, Task};
-}
+pub use crate::pool::ThreadPool;
+pub use crate::task::{AsyncTask, JoinHandle, SyncTask, Task};
 
 pub mod pool;
 pub mod task;
