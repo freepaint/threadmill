@@ -22,19 +22,20 @@ pub trait Scheduler {
 	) -> JoinHandle<T>;
 }
 
+use Priority::{Low, Normal};
 pub enum Priority {
 	/// Low priority for task given, will be processed last
-	/// Identical to Normal with default implementation
+	/// Identical to [`Normal`] with default implementation
 	/// Single threaded with default implementation
 	Low,
 	/// Normal priority for task given, will be processed in order given
-	/// Identical to Low with default implementation
+	/// Identical to [`Low`] with default implementation
 	/// Single threaded with default implementation
 	Normal,
 	/// High priority for task given, will be processed first
 	/// Single threaded with default implementation
 	High,
 	/// For bulk amount of tasks
-	/// Multi threaded with default implementation, processed in own [`crate::ThreadPool`]
+	/// Multi threaded with default implementation, processed in own [`ThreadPool`]
 	Bulk,
 }

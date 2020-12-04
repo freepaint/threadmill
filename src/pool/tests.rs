@@ -17,7 +17,7 @@ fn workload() {
 	for i in 0..5 {
 		pool.scheduler
 			.work
-			.scheduler
+			.enqueuer
 			.send(Box::new(MathWorker {
 				polygon: load.clone(),
 				bar: tx.clone(),
@@ -48,7 +48,7 @@ impl Task for MathWorker {
 		let mut rng = rand::thread_rng();
 		for _ in 0..steps {
 			let point = rng.gen();
-			if point_in_poligon(&point, &self.polygon) {
+			if point_in_polygon(&point, &self.polygon) {
 				self.hit_count += 1;
 			}
 		}
@@ -67,7 +67,7 @@ impl Task for MathWorker {
 	}
 }
 
-fn point_in_poligon(point: &Point, vertices: &Polygon) -> bool {
+fn point_in_polygon(point: &Point, vertices: &Polygon) -> bool {
 	if vertices.len() < 3 {
 		return false;
 	}
