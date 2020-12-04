@@ -2,24 +2,17 @@ mod death;
 #[cfg(test)]
 mod tests;
 
-use crate::pool::death::{DeathController, DeathToken};
-use crate::task::Task;
-use crate::{AsyncTask, Priority, Scheduler, SyncTask};
-use flume::{Selector, TryRecvError};
+use crate::{task, Priority, Scheduler, Task};
 use log::debug;
-use rand::Rng;
-use std::fmt::{Display, Formatter};
 use std::future::Future;
 use std::panic::UnwindSafe;
-use std::thread::JoinHandle;
-use std::time::Duration;
 
 type WatchdogCallback = (Box<dyn Task>, flume::Receiver<()>);
 
 pub struct ThreadPool {
 	scheduler: TaskScheduler,
-	handles: Vec<JoinHandle<()>>,
-	death_con: DeathController,
+	handles: Vec<std::thread::JoinHandle<()>>,
+	death_con: death::DeathController,
 }
 
 #[derive(Clone, Default)]
@@ -34,39 +27,8 @@ pub struct TaskScheduler {
 
 #[derive(Clone)]
 pub struct SchedulerQueue {
-	scheduler: flume::Sender<Box<dyn Task>>,
-	queue: flume::Receiver<Box<dyn Task>>,
-}
-
-impl Scheduler for TaskScheduler {
-	fn schedule(&self, priority: Priority, task: impl Task + 'static) {
-		let task = Box::new(task) as Box<dyn Task>;
-		match priority {
-			Priority::Low | Priority::Normal => self.regular.scheduler.send(task).expect("No ThreadPool"),
-			Priority::High => self.priority.scheduler.send(task).expect("No ThreadPool"),
-			Priority::Bulk => self.work.scheduler.send(task).expect("No ThreadPool"),
-		}
-	}
-
-	fn spawn<T: 'static + Send>(
-		&self,
-		priority: Priority,
-		fun: impl FnOnce() -> T + 'static + Send + UnwindSafe,
-	) -> crate::JoinHandle<T> {
-		let (task, join_handle) = SyncTask::new(fun);
-		self.schedule(priority, task);
-		join_handle
-	}
-
-	fn spawn_async<T: 'static + Send>(
-		&self,
-		priority: Priority,
-		future: impl Future<Output = T> + 'static + Send,
-	) -> crate::JoinHandle<T> {
-		let (task, join_handle) = AsyncTask::new(future);
-		self.schedule(priority, task);
-		join_handle
-	}
+	enqueuer: flume::Sender<Box<dyn Task>>,
+	dequeuer: flume::Receiver<Box<dyn Task>>,
 }
 
 impl ThreadPool {
@@ -75,9 +37,11 @@ impl ThreadPool {
 	}
 
 	pub fn new_with_max(thread_count: usize) -> Self {
-		let tp_id = rand::thread_rng().gen::<u32>();
+		use rand::Rng;
+
+		let tp_id = rand::thread_rng().gen::<u16>();
 		let scheduler = TaskScheduler::default();
-		let mut death_con = DeathController::default();
+		let mut death_con = death::DeathController::default();
 
 		// Spawn work threads
 		let (callback, worker_callback) = flume::unbounded();
@@ -196,18 +160,82 @@ impl Drop for ThreadPool {
 	}
 }
 
+impl Scheduler for TaskScheduler {
+	fn schedule(&self, priority: Priority, task: impl Task + 'static) {
+		let task = Box::new(task) as Box<dyn Task>;
+		match priority {
+			Priority::Low | Priority::Normal => self.regular.enqueuer.send(task).expect("No ThreadPool"),
+			Priority::High => self.priority.enqueuer.send(task).expect("No ThreadPool"),
+			Priority::Bulk => self.work.enqueuer.send(task).expect("No ThreadPool"),
+		}
+	}
+
+	fn spawn<T: 'static + Send>(
+		&self,
+		priority: Priority,
+		fun: impl FnOnce() -> T + 'static + Send + UnwindSafe,
+	) -> crate::JoinHandle<T> {
+		let (task, join_handle) = task::SyncTask::new(fun);
+		self.schedule(priority, task);
+		join_handle
+	}
+
+	fn spawn_async<T: 'static + Send>(
+		&self,
+		priority: Priority,
+		future: impl Future<Output = T> + 'static + Send,
+	) -> crate::JoinHandle<T> {
+		let (task, join_handle) = task::AsyncTask::new(future);
+		self.schedule(priority, task);
+		join_handle
+	}
+}
+
 impl Default for SchedulerQueue {
 	fn default() -> Self {
 		let (tx, rx) = flume::unbounded();
 		debug!("New Queue created");
 		Self {
-			scheduler: tx,
-			queue: rx,
+			enqueuer: tx,
+			dequeuer: rx,
 		}
 	}
 }
 
-fn run_watchdog(queues: Vec<(flume::Receiver<WatchdogCallback>, SchedulerQueue)>, dt: DeathToken) {
+fn gen_executor(
+	queue: SchedulerQueue,
+	watchdog: flume::Sender<WatchdogCallback>,
+	dt: death::DeathToken,
+) -> impl FnOnce() {
+	use flume::{Selector, TryRecvError};
+
+	move || {
+		while let Some(Ok(mut task)) = Selector::new()
+			.recv(dt.listen(), |_| None)
+			.recv(&queue.dequeuer, Some)
+			.wait()
+		{
+			let (tx, rx) = flume::bounded(1);
+			task.exec(Box::new(move || {
+				tx.send(()).expect("reschedule channel may not be closed")
+			}));
+			match rx.try_recv() {
+				Ok(_) => drop(queue.enqueuer.send(task)),
+				Err(TryRecvError::Disconnected) => (),
+				Err(TryRecvError::Empty) => {
+					watchdog
+						.send((task, rx))
+						.expect("Watchdog died, unable to reschedule task");
+				}
+			}
+		}
+	}
+}
+
+fn run_watchdog(queues: Vec<(flume::Receiver<WatchdogCallback>, SchedulerQueue)>, dt: death::DeathToken) {
+	use std::fmt::{Display, Formatter};
+	use std::time::Duration;
+
 	log::debug!("Started watchdog");
 	let mut queues = queues
 		.into_iter()
@@ -259,7 +287,7 @@ fn run_watchdog(queues: Vec<(flume::Receiver<WatchdogCallback>, SchedulerQueue)>
 			Handle::Reschedule(task_id) => {
 				let (task, _, sched_id) = tasks.remove(task_id);
 				let (_, _, sched) = queues.get(sched_id).unwrap();
-				let _ = sched.scheduler.send(task);
+				let _ = sched.enqueuer.send(task);
 				debug!(
 					"Rescheduling task, Task{{id={}}} -> Scheduler{{id={}}}",
 					task_id, sched_id
@@ -296,35 +324,6 @@ fn run_watchdog(queues: Vec<(flume::Receiver<WatchdogCallback>, SchedulerQueue)>
 				Handle::RemoveTask(id) => write!(f, "RemoveTask(id={})", id),
 				Handle::RemoveQueue(id) => write!(f, "RemoveQueue(id={})", id),
 				Handle::Death => write!(f, "Death"),
-			}
-		}
-	}
-}
-
-// This got its own function for "readability"
-fn gen_executor(
-	queue: SchedulerQueue,
-	watchdog: flume::Sender<WatchdogCallback>,
-	dt: DeathToken,
-) -> impl FnOnce() {
-	move || {
-		while let Some(Ok(mut task)) = Selector::new()
-			.recv(dt.listen(), |_| None)
-			.recv(&queue.queue, Some)
-			.wait()
-		{
-			let (tx, rx) = flume::bounded(1);
-			task.exec(Box::new(move || {
-				tx.send(()).expect("reschedule channel may not be closed")
-			}));
-			match rx.try_recv() {
-				Ok(_) => drop(queue.scheduler.send(task)),
-				Err(TryRecvError::Disconnected) => (),
-				Err(TryRecvError::Empty) => {
-					watchdog
-						.send((task, rx))
-						.expect("Watchdog died, unable to reschedule task");
-				}
 			}
 		}
 	}
