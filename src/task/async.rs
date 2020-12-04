@@ -36,7 +36,10 @@ impl<T: 'static + Send> Task for AsyncTask<T> {
 		let mut lock = self.inner.lock();
 		let mut pin = match lock.take() {
 			Some(future) => future,
-			None => return, // TODO: polled complete future, announce error with log
+			None => {
+				log::error!("Future polled after completion");
+				return;
+			}
 		};
 		let waker = TaskWaker::new(reschedule);
 		let waker = futures_task::waker(Arc::new(waker));
