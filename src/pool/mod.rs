@@ -9,19 +9,52 @@ use std::panic::UnwindSafe;
 
 type WatchdogCallback = (Box<dyn Task>, flume::Receiver<()>);
 
-pub struct ThreadPool {
+/// [`TaskPool`]s provide and manage threads to schedule sync and async tasks, although sync tasks may never block.
+/// There are 3 Priorities that are implemented with this design, [`Normal`], [`High`] and [`Bulk`] ([`Low`] maps to [`Normal`])
+///
+/// ```
+/// use threadmill::pool::TaskPool;
+/// use threadmill::{Scheduler, Priority};
+///
+/// // This spawns a TaskPool with n + 3 threads, while n equals to the count of logical cores.
+/// let pool = TaskPool::new();
+/// // Now we spawn a task with normal priority to perform some *very hard* math
+/// let join_handle = pool.spawn(Priority::Normal, || 13 * 100 + 37);
+/// // We can either join a task with `join` (Sync) or `join_async` (async)
+/// assert_eq!(join_handle.join().unwrap(), 1337);
+/// ```
+/// [`JoinHandle`]s can also be safely dropped, the task will execute to end and drop all resources afterwards.
+/// ```
+/// use threadmill::pool::TaskPool;
+/// use threadmill::{Priority, Scheduler};
+///
+/// let pool = TaskPool::new();
+/// // This time we need to process a lot of *immense* computation, so we can spawn a lot of tasks and
+/// let sum = (0..42)
+///     .map(|_| pool.spawn(Priority::Bulk, || 1u32))
+///     .collect::<Vec<_>>() // We collect here to force all tasks to be spawned first
+///     .into_iter()
+///     .map(|join_handle| join_handle.join().unwrap())
+///     .sum::<u32>();
+/// assert_eq!(sum, 42);
+/// ```
+///
+/// [`Low`]: ../enum.Priority.html
+/// [`Normal`]: ../enum.Priority.html
+/// [`High`]: ../enum.Priority.html
+/// [`Bulk`]: ../enum.Priority.html
+/// [`JoinHandle`]: ../task/struct.JoinHandle.html
+pub struct TaskPool {
 	scheduler: TaskScheduler,
 	handles: Vec<std::thread::JoinHandle<()>>,
 	death_con: death::DeathController,
 }
 
+///
 #[derive(Clone, Default)]
 pub struct TaskScheduler {
-	/// Despite its name, priority only gets a single thread with the single goal of depleting this queue forever
 	priority: SchedulerQueue,
-	/// This queue processes all tasks single threaded with regular priority
 	regular: SchedulerQueue,
-	/// This queue processes all heavy work loads with n threads, n = num of cpus
 	work: SchedulerQueue,
 }
 
@@ -31,7 +64,7 @@ pub struct SchedulerQueue {
 	dequeuer: flume::Receiver<Box<dyn Task>>,
 }
 
-impl ThreadPool {
+impl TaskPool {
 	pub fn new() -> Self {
 		Self::default()
 	}
@@ -120,7 +153,7 @@ impl ThreadPool {
 	}
 }
 
-impl Scheduler for ThreadPool {
+impl Scheduler for TaskPool {
 	fn schedule(&self, priority: Priority, task: impl Task + 'static + Send) {
 		self.scheduler.schedule(priority, task)
 	}
@@ -142,13 +175,13 @@ impl Scheduler for ThreadPool {
 	}
 }
 
-impl Default for ThreadPool {
+impl Default for TaskPool {
 	fn default() -> Self {
 		Self::new_with_max(num_cpus::get())
 	}
 }
 
-impl Drop for ThreadPool {
+impl Drop for TaskPool {
 	fn drop(&mut self) {
 		debug!("Sending Death notification...");
 		self.death_con.kill();

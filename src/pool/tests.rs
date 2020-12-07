@@ -12,7 +12,7 @@ fn workload() {
 	for _ in 0..10 {
 		load.push(rng.gen());
 	}
-	let pool = super::ThreadPool::new();
+	let pool = super::TaskPool::new();
 	let (tx, rx) = flume::unbounded();
 	for i in 0..5 {
 		pool.scheduler

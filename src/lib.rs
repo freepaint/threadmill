@@ -2,7 +2,7 @@ use std::future::Future;
 
 use std::panic::UnwindSafe;
 
-pub use crate::pool::ThreadPool;
+pub use crate::pool::TaskPool;
 pub use crate::task::{AsyncTask, JoinHandle, SyncTask, Task};
 
 pub mod pool;
