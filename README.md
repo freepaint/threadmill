@@ -1,2 +1,1 @@
-# threadmill
-The thing that makes freepaint go brrrr
+This project is not longer required
