@@ -1,2 +1,2 @@
 # threadmill
-The thing that makes freepaint go brrrr
+This version of threadmill is concitered dead for now, until further notice
